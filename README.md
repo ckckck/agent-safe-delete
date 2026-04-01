@@ -2,8 +2,6 @@
 
 [English](README.en.md)
 
-> 通过把删除改写为可恢复归档，保护用户免受 AI Agent 破坏性文件操作的影响。
-
 `agent-safe-delete` 是一个面向 AI Agent 的安全删除技能：当 Agent 需要“删除”文件或目录时，不执行不可恢复的永久删除，而是把目标移动到可恢复的归档区，并把恢复所需 metadata 写入隐藏目录中的 JSON 文件。
 
 ## 核心思路
@@ -133,6 +131,10 @@ metadata JSON 示例：
 - 目录归档与恢复
 - metadata JSON 生成
 - 失效 metadata 自动清理
+
+## 许可证
+
+本项目使用 MIT License，具体内容见 `LICENSE`。
 
 ## 后续可扩展方向
 

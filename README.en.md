@@ -134,6 +134,10 @@ The smoke test verifies:
 - metadata JSON generation
 - stale metadata auto-pruning
 
+## License
+
+This project is licensed under the MIT License. See `LICENSE` for details.
+
 ## Possible Next Steps
 
 - `list` / `inspect` subcommands
