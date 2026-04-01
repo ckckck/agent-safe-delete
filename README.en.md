@@ -138,8 +138,6 @@ The smoke test verifies:
 
 This project is licensed under the MIT License. See `LICENSE` for details.
 
-## Possible Next Steps
+## Acknowledgements
 
-- `list` / `inspect` subcommands
-- `restore --force`
-- richer JSON output
+- [Linux Do Community](https://linux.do/)

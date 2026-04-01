@@ -136,8 +136,6 @@ metadata JSON 示例：
 
 本项目使用 MIT License，具体内容见 `LICENSE`。
 
-## 后续可扩展方向
+## 致谢
 
-- `list` / `inspect` 子命令
-- `restore --force`
-- 更丰富的 JSON 输出
+- [Linux Do 社区](https://linux.do/)
