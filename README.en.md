@@ -78,6 +78,10 @@ but also when:
 - an agent needs to clean up obsolete directories, stale modules, broken outputs, or temporary artifacts
 - an agent must remove an old object in order to replace it with a new one
 
+That cleanup scope includes not only obviously obsolete files, but also intermediate files, temporary files, conversion source files, cache files, and one-off generated artifacts. If the agent is about to remove them from the filesystem, this skill should trigger.
+
+For example, cleaning up an intermediate `html` file after generating the final `docx`, deleting temporary images after an export succeeds, or removing a source-format file after a successful conversion should not be treated as exceptions that can be deleted directly.
+
 In other words, whenever an agent is preparing to delete, replace, or clean up filesystem objects, this skill should take over and rewrite permanent deletion into recoverable archiving.
 
 ## Archive Layout
@@ -118,6 +122,7 @@ Example metadata JSON:
 - `restore` defaults to the original path and fails if the restore target already exists.
 - Both files and directories produce structured metadata.
 - If archived objects are manually removed, stale metadata is automatically cleaned up later.
+- Even when the target exists only as an intermediate file, temporary file, cache file, or conversion source file created to produce a final deliverable, the agent must not use direct `rm`; it must still archive the target.
 - Ambiguous delete targets must be clarified first; only high-risk targets such as `.env`, credentials, system paths, repository roots, or large batch deletions require an extra confirmation.
 
 ## Local Verification

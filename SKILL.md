@@ -1,6 +1,6 @@
 ---
 name: agent-safe-delete
-description: Use when a task involves archiving, removing, replacing, or cleaning up files or folders, whether explicitly requested by the user or inferred during agent execution, and deletions should become reversible archive moves instead of permanent removal.
+description: Use when a task involves archiving, removing, replacing, or cleaning up files or folders, including temporary files, intermediate outputs, conversion source files, or one-off generated artifacts, whether explicitly requested by the user or inferred during agent execution, and deletions should become reversible archive moves instead of permanent removal.
 ---
 
 # Agent Safe Delete
@@ -18,6 +18,7 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 - 用户明确要求“归档”文件或文件夹时触发。
 - 用户要求删除文件或文件夹时也触发。
 - Agent 在执行过程中，判断需要删除、替换、清理某个文件或目录时也触发。
+- 中间文件、临时文件、转换源文件、缓存文件、一次性生成文件，只要接下来要从文件系统移除，也属于本技能触发范围。
 - “这个文件”“这个文件夹”这类指代如果不够明确，先问一个最短澄清问题。
 - 如果用户请求的是批量归档或批量删除，而路径列表并不明确，先澄清后再执行。
 - 只覆盖文件和文件夹删除，不覆盖数据库记录、系统配置、Git 历史或其他非文件系统删除。
@@ -28,6 +29,10 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 - 清理废弃目录或重构遗留模块
 - 用新文件替换旧文件时需要先删除旧对象
 - 清理错误生成的输出目录或临时文件夹
+- 生成最终交付文件后清理中间 `.html`、`.md`、`.txt`、图片或脚本文件
+- 转换或导出成功后删除源格式文件、缓存文件或一次性产物
+
+不要因为文件是 Agent 刚创建的、容易重建的、临时的，或只是为了完成当前任务而生成的，就把它当作可以直接删除的例外。
 
 ## 不适用场景
 
@@ -86,6 +91,7 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 - 当用户说“删除文件/文件夹”时，不执行 `rm`，而是执行 `archive`。
 - 当用户主动说“归档”时，直接执行 `archive`。
 - 当 Agent 在执行过程中准备删除、替换或清理文件系统对象时，也必须优先执行 `archive`，而不是直接删除。
+- 即使删除目标只是为生成最终交付物而产生的中间文件、临时文件或转换源文件，也不得直接使用 `rm`，仍然必须走 `archive`。
 - `archive` 是底层动作，`safe delete` 是技能语义。
 - `restore` 用于恢复已归档条目，不属于危险删除确认流程。
 - 每次执行命令前会自动清理失效 metadata，避免隐藏目录长期膨胀。
