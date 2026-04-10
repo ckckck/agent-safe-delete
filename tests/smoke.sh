@@ -96,4 +96,33 @@ rm -rf "$orphan_archived_path"
 $CLI show-archive-root >/dev/null
 [ ! -e "$orphan_metadata_path" ]
 
+broken_target="$workspace/missing-target"
+broken_link="$workspace/broken-link"
+ln -s "$broken_target" "$broken_link"
+[ -L "$broken_link" ]
+[ ! -e "$broken_link" ]
+
+broken_json="$($CLI archive "$broken_link" --json)"
+broken_entry_id="$(printf '%s' "$broken_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+broken_archived_path="$(printf '%s' "$broken_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["archived_path"])')"
+broken_metadata_path="$(printf '%s' "$broken_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["metadata_path"])')"
+[ ! -L "$broken_link" ]
+[ -L "$broken_archived_path" ]
+[ -f "$broken_metadata_path" ]
+
+broken_kind="$(python3 - "$broken_metadata_path" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+    data = json.load(handle)
+print(data['kind'])
+PY
+)"
+[ "$broken_kind" = "symlink" ]
+
+$CLI restore "$broken_entry_id" >/dev/null
+[ -L "$broken_link" ]
+[ ! -e "$broken_link" ]
+
 echo "smoke test passed"

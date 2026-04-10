@@ -4,7 +4,7 @@
 
 > Protect users from destructive AI agent file operations by turning delete into reversible archive moves.
 
-`agent-safe-delete` is a safe-delete skill for AI agents. When an agent needs to delete a file or directory, it does not perform irreversible permanent deletion. Instead, it moves the target into a recoverable archive area and stores restore metadata as JSON files inside a hidden metadata directory.
+`agent-safe-delete` is a safe-delete skill for AI agents. When an agent needs to delete a file, directory, or symlink, it does not perform irreversible permanent deletion. Instead, it moves the target into a recoverable archive area and stores restore metadata as JSON files inside a hidden metadata directory.
 
 ## Core Idea
 
@@ -14,7 +14,7 @@
 - If the variable is not set, a platform default path is used.
 - Archived objects keep their original names whenever possible and are placed directly in the archive root; timestamp suffixes are added only on collisions.
 - Metadata is stored in a hidden `.agent-safe-delete/` directory under the archive root.
-- `restore` can move files or directories back to their original paths or to a user-specified location.
+- `restore` can move files, directories, or symlinks back to their original paths or to a user-specified location.
 - Stale metadata is automatically pruned before each command runs.
 - Explicit deletion of ordinary files or directories is archived directly; only high-risk deletions require an extra confirmation.
 
@@ -115,12 +115,12 @@ Example metadata JSON:
 
 ## Behavioral Guarantees
 
-- Missing targets fail immediately.
+- Missing targets fail immediately; broken symlinks are handled as symlink objects rather than treated as missing paths.
 - Paths already inside the archive root cannot be archived again.
 - The archive root itself and the hidden metadata directory cannot be archived.
 - Archiving uses `mv`, not copy.
 - `restore` defaults to the original path and fails if the restore target already exists.
-- Both files and directories produce structured metadata.
+- Files, directories, and symlinks produce structured metadata.
 - If archived objects are manually removed, stale metadata is automatically cleaned up later.
 - Even when the target exists only as an intermediate file, temporary file, cache file, or conversion source file created to produce a final deliverable, the agent must not use direct `rm`; it must still archive the target.
 - Ambiguous delete targets must be clarified first; only high-risk targets such as `.env`, credentials, system paths, repository roots, or large batch deletions require an extra confirmation.
@@ -136,6 +136,7 @@ The smoke test verifies:
 - default archive root resolution
 - file archive and restore
 - directory archive and restore
+- broken symlink archive and restore
 - metadata JSON generation
 - stale metadata auto-pruning
 

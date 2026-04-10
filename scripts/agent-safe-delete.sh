@@ -15,6 +15,11 @@ error() {
   exit 1
 }
 
+path_exists_or_link() {
+  local target_path="$1"
+  [ -e "$target_path" ] || [ -L "$target_path" ]
+}
+
 require_python() {
   command -v python3 >/dev/null 2>&1 || error "需要 python3 才能运行此脚本。"
 }
@@ -248,7 +253,7 @@ for name in os.listdir(metadata_dir):
     archived_path = data.get('archived_path')
     if not archived_path:
         continue
-    if not os.path.exists(archived_path):
+    if not (os.path.exists(archived_path) or os.path.islink(archived_path)):
         os.remove(path)
 PY
 }
@@ -309,7 +314,7 @@ archive_path() {
   local source_path
   source_path="$(abspath "$source_input")"
 
-  if [ ! -e "$source_path" ]; then
+  if ! path_exists_or_link "$source_path"; then
     error "归档失败：路径不存在：$source_input"
   fi
 
@@ -337,13 +342,15 @@ archive_path() {
   destination_path="$safe_archive_root/$archived_name"
   metadata_path="$(metadata_path_for_id "$entry_id")"
 
-  if [ -d "$source_path" ]; then
+  if [ -L "$source_path" ]; then
+    kind="symlink"
+  elif [ -d "$source_path" ]; then
     kind="directory"
   else
     kind="file"
   fi
 
-  if [ -e "$destination_path" ]; then
+  if path_exists_or_link "$destination_path"; then
     destination_path="$(append_timestamp_path "$destination_path")"
   fi
 
@@ -421,7 +428,7 @@ restore_path() {
   archived_path="$(read_metadata_field "$metadata_path" archived_path)"
   kind="$(read_metadata_field "$metadata_path" kind)"
 
-  [ -e "$archived_path" ] || error "恢复失败：归档对象不存在：$archived_path"
+  path_exists_or_link "$archived_path" || error "恢复失败：归档对象不存在：$archived_path"
 
   if [ -n "$restore_to" ]; then
     target_path="$(abspath "$restore_to")"
@@ -429,7 +436,7 @@ restore_path() {
     target_path="$original_path"
   fi
 
-  if [ -e "$target_path" ]; then
+  if path_exists_or_link "$target_path"; then
     error "恢复失败：目标路径已存在：$target_path"
   fi
 

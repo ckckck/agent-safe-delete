@@ -7,7 +7,7 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 
 ## 概述
 
-把文件或目录“删除”改写为“移动到安全归档区”，避免 AI Agent 执行不可恢复的永久删除。
+把文件、目录或 symlink 的“删除”改写为“移动到安全归档区”，避免 AI Agent 执行不可恢复的永久删除。
 
 本技能既支持用户主动要求“归档”，也支持用户要求“删除文件/文件夹”时，用归档代替真正的删除。
 
@@ -21,7 +21,7 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 - 中间文件、临时文件、转换源文件、缓存文件、一次性生成文件，只要接下来要从文件系统移除，也属于本技能触发范围。
 - “这个文件”“这个文件夹”这类指代如果不够明确，先问一个最短澄清问题。
 - 如果用户请求的是批量归档或批量删除，而路径列表并不明确，先澄清后再执行。
-- 只覆盖文件和文件夹删除，不覆盖数据库记录、系统配置、Git 历史或其他非文件系统删除。
+- 只覆盖文件、文件夹和 symlink 删除，不覆盖数据库记录、系统配置、Git 历史或其他非文件系统删除。
 
 典型隐式触发场景包括：
 
@@ -101,7 +101,7 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 
 ## 保护规则
 
-- 目标不存在则直接报错，不猜测。
+- 目标不存在则直接报错，不猜测；broken symlink 按 symlink 本身处理。
 - 目标如果已经位于归档目录中，则直接失败，避免嵌套归档。
 - 不能归档归档根目录本身，也不能归档隐藏 metadata 目录。
 - 归档完成后源路径必须消失，因为这里是移动而不是复制。
