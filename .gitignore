@@ -1,3 +1,4 @@
 local-backups/
 AGENTS.md
 llmdoc/
+.worktrees/
