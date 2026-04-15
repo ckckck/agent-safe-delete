@@ -51,39 +51,43 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 查看当前生效的归档目录：
 
 ```bash
-./scripts/agent-safe-delete.sh show-archive-root
+python scripts/agent-safe-delete.py show-archive-root
 ```
 
 ## 用法
 
+以下命令示例假定你是在仓库根目录，或已经位于该技能自身的安装目录中执行它们。
+
+如果某个 Agent 平台会在其他工作目录中执行技能命令，则不要假设工作区里存在 `scripts/agent-safe-delete.py`。这类已安装技能应由宿主平台或安装层解析技能的实际安装目录，或提供一个稳定的包装命令，再调用本仓库附带的 Python CLI。
+
 查看当前生效的归档目录：
 
 ```bash
-./scripts/agent-safe-delete.sh show-archive-root
+python scripts/agent-safe-delete.py show-archive-root
 ```
 
 归档文件或目录：
 
 ```bash
-./scripts/agent-safe-delete.sh archive <path>
+python scripts/agent-safe-delete.py archive <path>
 ```
 
 以 JSON 返回结果：
 
 ```bash
-./scripts/agent-safe-delete.sh archive <path> --json
+python scripts/agent-safe-delete.py archive <path> --json
 ```
 
 恢复到原路径：
 
 ```bash
-./scripts/agent-safe-delete.sh restore <entry-id>
+python scripts/agent-safe-delete.py restore <entry-id>
 ```
 
 恢复到指定路径：
 
 ```bash
-./scripts/agent-safe-delete.sh restore <entry-id> --to <path>
+python scripts/agent-safe-delete.py restore <entry-id> --to <path>
 ```
 
 ## 执行约定
@@ -117,10 +121,14 @@ description: Use when a task involves archiving, removing, replacing, or cleanin
 
 ## 实现入口
 
+本仓库附带的 CLI 入口文件是 `scripts/agent-safe-delete.py`。
+
+在仓库内开发或调试时，可以直接使用下面的相对路径命令。在已安装技能场景中，应先定位技能自身目录，再调用这个入口，而不是把 `scripts/agent-safe-delete.py` 解释为当前工作区相对路径。
+
 执行脚本：
 
 ```bash
-./scripts/agent-safe-delete.sh <subcommand> [args]
+python scripts/agent-safe-delete.py <subcommand> [args]
 ```
 
 支持的子命令：

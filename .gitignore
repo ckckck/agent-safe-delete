@@ -2,3 +2,4 @@ local-backups/
 AGENTS.md
 llmdoc/
 .worktrees/
+__pycache__/

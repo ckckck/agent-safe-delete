@@ -40,8 +40,9 @@ agent-safe-delete/
   README.en.md
   SKILL.md
   scripts/
-    agent-safe-delete.sh
+    agent-safe-delete.py
   tests/
+    test_agent_safe_delete.py
     smoke.sh
 ```
 
@@ -49,19 +50,32 @@ agent-safe-delete/
 
 ### 1. Use as a skill
 
-Place the repository in a skill-discoverable location and have the skill invoke `scripts/agent-safe-delete.sh`.
+Place the repository in a skill-discoverable location and treat `scripts/agent-safe-delete.py` as the bundled CLI entrypoint for the skill.
+
+There are two different execution contexts to keep separate:
+
+- For repo-local development, testing, or manual runs, you can execute `python scripts/agent-safe-delete.py ...` from the repository root.
+- For an installed skill, do not assume the agent's current working directory is the skill directory, and do not assume the current workspace contains `scripts/agent-safe-delete.py`. In that case, the host platform or installation layer should resolve the skill's actual installed directory, or provide a stable wrapper command, and then invoke this Python entrypoint.
 
 This skill is not designed only for cases where the user explicitly says “delete”. It is designed to take over deletion semantics whenever an agent is about to remove, replace, or clean up filesystem objects.
 
 ### 2. Use as a CLI tool
 
+The examples below assume the current directory is the repository root:
+
 ```bash
-./scripts/agent-safe-delete.sh show-archive-root
-./scripts/agent-safe-delete.sh archive ./example.txt
-./scripts/agent-safe-delete.sh archive ./build --json
-./scripts/agent-safe-delete.sh restore ASD-20260401-101530-8f3k2m
-./scripts/agent-safe-delete.sh restore ASD-20260401-101530-8f3k2m --to ./restored.txt
+python scripts/agent-safe-delete.py show-archive-root
+python scripts/agent-safe-delete.py archive ./example.txt
+python scripts/agent-safe-delete.py archive ./build --json
+python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m
+python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m --to ./restored.txt
 ```
+
+## Runtime Requirements
+
+- A working `python` command is required.
+- `bash` is no longer the only supported launcher.
+- The same command works from PowerShell, macOS, and Linux shells.
 
 ## Why It Triggers Automatically
 
@@ -118,7 +132,7 @@ Example metadata JSON:
 - Missing targets fail immediately; broken symlinks are handled as symlink objects rather than treated as missing paths.
 - Paths already inside the archive root cannot be archived again.
 - The archive root itself and the hidden metadata directory cannot be archived.
-- Archiving uses `mv`, not copy.
+- Archiving uses move semantics, not copy.
 - `restore` defaults to the original path and fails if the restore target already exists.
 - Files, directories, and symlinks produce structured metadata.
 - If archived objects are manually removed, stale metadata is automatically cleaned up later.

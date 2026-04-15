@@ -2,7 +2,7 @@
 
 ## 背景
 
-当前仓库的唯一实现入口是 [scripts/agent-safe-delete.sh](file:///Users/caike/3.%E5%B7%A5%E5%85%B7/agent-safe-delete/scripts/agent-safe-delete.sh)，它依赖 `bash`、`mv`、`uname`、`date` 等 POSIX 命令。虽然脚本在默认归档目录推导中考虑了 Windows 的 `LOCALAPPDATA`，但实现分支只覆盖 `MINGW`、`MSYS`、`CYGWIN` 这类类 Unix 运行时，而不是原生 Windows PowerShell。
+当前仓库的唯一实现入口是 legacy shell launcher，它依赖 `bash`、`mv`、`uname`、`date` 等 POSIX 命令。虽然旧实现的默认归档目录推导考虑了 Windows 的 `LOCALAPPDATA`，但实现分支只覆盖 `MINGW`、`MSYS`、`CYGWIN` 这类类 Unix 运行时，而不是原生 Windows PowerShell。
 
 该项目未来将给团队通过 Agent 技能使用，而不是让人手动在终端执行。对这种使用方式来说，最重要的是“技能入口在不同 shell 与操作系统下都能稳定执行”，而不是保留某个历史脚本名。
 
@@ -16,7 +16,7 @@
 
 ## 非目标
 
-- 不保留 `scripts/agent-safe-delete.sh` 作为兼容入口。
+- 不保留 legacy shell launcher 作为兼容入口。
 - 不新增 PowerShell 独立业务实现。
 - 不引入 Python 第三方依赖或打包体系。
 - 不借本次重构修改技能触发规则、确认策略或 metadata schema。
@@ -232,7 +232,7 @@ python scripts/agent-safe-delete.py ...
 4. 更新 `tests/smoke.sh` 改为调用 Python CLI。
 5. 更新 `README.md`、`README.en.md`、`SKILL.md`。
 6. 运行测试与 smoke 验证。
-7. 删除旧的 `scripts/agent-safe-delete.sh`。
+7. 删除旧的 legacy shell launcher。
 
 ## 验收标准
 

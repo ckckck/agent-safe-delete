@@ -18,7 +18,7 @@
 - Modify: `README.md` — 更新主文档中的命令示例、依赖说明和 Windows 说明。
 - Modify: `README.en.md` — 同步英文文档。
 - Modify: `SKILL.md` — 把技能实现入口改成 Python 命令约定。
-- Delete: `scripts/agent-safe-delete.sh` — 删除旧的 bash 真实实现。
+- Delete: legacy shell launcher — 删除旧的 bash 真实实现。
 
 ### Task 1: Add failing Python regression tests
 
@@ -746,13 +746,13 @@ git commit -m "docs: switch skill docs to python cli"
 ### Task 6: Remove the legacy shell implementation and run full verification
 
 **Files:**
-- Delete: `scripts/agent-safe-delete.sh`
+- Delete: legacy shell launcher
 - Modify: `tests/smoke.sh`
 - Test: `tests/test_agent_safe_delete.py`
 
 - [ ] **Step 1: Delete the legacy shell implementation**
 
-Remove `scripts/agent-safe-delete.sh` from the repository after confirming Tasks 1-5 are green.
+Remove the legacy shell launcher from the repository after confirming Tasks 1-5 are green.
 
 - [ ] **Step 2: Run Python regression tests**
 

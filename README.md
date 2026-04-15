@@ -38,8 +38,9 @@ agent-safe-delete/
   README.en.md
   SKILL.md
   scripts/
-    agent-safe-delete.sh
+    agent-safe-delete.py
   tests/
+    test_agent_safe_delete.py
     smoke.sh
 ```
 
@@ -47,19 +48,32 @@ agent-safe-delete/
 
 ### 1. 作为技能使用
 
-把整个目录放到 Agent 可发现的 skills 目录中，并让技能调用 `scripts/agent-safe-delete.sh`。
+把整个目录放到 Agent 可发现的 skills 目录中，让技能把 `scripts/agent-safe-delete.py` 作为其附带 CLI 入口来调用。
+
+这里要区分两种场景：
+
+- 在仓库内开发、测试或直接试跑时，可以从仓库根目录执行 `python scripts/agent-safe-delete.py ...`。
+- 在“已安装 skill”场景中，不应假设 Agent 的当前工作目录就是技能目录，也不应假设当前工作区里存在 `scripts/agent-safe-delete.py`。此时应由宿主平台或安装层解析技能的实际安装目录，或提供稳定的包装命令，再调用这个 Python 入口。
 
 这个技能的定位不是“只有用户说 delete 才用”，而是“只要 Agent 准备删除、替换、清理文件系统对象，就先由它接管删除语义”。
 
 ### 2. 直接作为命令行工具使用
 
+以下命令示例假定当前目录就是仓库根目录：
+
 ```bash
-./scripts/agent-safe-delete.sh show-archive-root
-./scripts/agent-safe-delete.sh archive ./example.txt
-./scripts/agent-safe-delete.sh archive ./build --json
-./scripts/agent-safe-delete.sh restore ASD-20260401-101530-8f3k2m
-./scripts/agent-safe-delete.sh restore ASD-20260401-101530-8f3k2m --to ./restored.txt
+python scripts/agent-safe-delete.py show-archive-root
+python scripts/agent-safe-delete.py archive ./example.txt
+python scripts/agent-safe-delete.py archive ./build --json
+python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m
+python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m --to ./restored.txt
 ```
+
+## 运行依赖
+
+- 需要可用的 `python` 命令。
+- 不再依赖 `bash` 作为唯一运行入口。
+- 在 Windows PowerShell、macOS、Linux 下都使用同一条命令调用。
 
 ## 为什么会自动触发
 
