@@ -39,8 +39,10 @@ agent-safe-delete/
   SKILL.md
   scripts/
     agent-safe-delete.py
+    remote-safe-delete.py
   tests/
     test_agent_safe_delete.py
+    test_remote_safe_delete.py
     smoke.sh
 ```
 
@@ -67,6 +69,78 @@ python scripts/agent-safe-delete.py archive ./example.txt
 python scripts/agent-safe-delete.py archive ./build --json
 python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m
 python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m --to ./restored.txt
+```
+
+### 3. 远端服务器安全归档
+
+远端归档不把 `ssh:` 路径交给本机归档脚本处理，而是在目标服务器上创建归档批次并移动目标对象。脚本不内置任何真实服务器信息，所有服务器和项目目录都通过参数传入，归档根通过 `--remote-archive-root` 或环境变量 `ASD_REMOTE_ARCHIVE_ROOT` 指定。
+
+`--remote-archive-root` 优先级高于 `ASD_REMOTE_ARCHIVE_ROOT`。如果两者都没有提供，远端归档命令会失败，不会猜测项目或服务器专属目录。通用推荐值是：
+
+```bash
+export ASD_REMOTE_ARCHIVE_ROOT="~/.agent-safe-delete"
+```
+
+在 SSH 执行模式下，`~/.agent-safe-delete` 会由目标服务器按当前 SSH 用户解析，因此不同服务器或不同登录用户会自然落到各自 home 下。安全归档技能不依赖项目专属服务器管理技能来决定归档目录；项目技能可以负责确认 SSH 目标和项目目录，归档根仍由这个通用环境变量或显式参数控制。
+
+`rsync --delete` 前先生成删除计划：
+
+```bash
+python scripts/remote-safe-delete.py plan-rsync-delete \
+  --dry-run-output <dry-run-output.txt> \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose> \
+  --output <plan.json>
+```
+
+也可以让脚本执行 dry-run：
+
+```bash
+python scripts/remote-safe-delete.py plan-rsync-delete \
+  --rsync-source <local-source>/ \
+  --rsync-destination <ssh-target>:<remote-project-root>/ \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose> \
+  --output <plan.json>
+```
+
+按计划归档远端将删对象：
+
+```bash
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json>
+```
+
+显式归档某个远端路径：
+
+```bash
+python scripts/remote-safe-delete.py archive-path \
+  --ssh-target <ssh-target> \
+  --remote-path <remote-absolute-path> \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose>
+```
+
+生产环境要求更严格：`plan-rsync-delete` 必须提供 `--source-git-ref <commit-or-tag>`，`archive-list` 必须提供 `--confirm-plan <plan_sha256>`。高风险路径还必须逐项提供 `--confirm-high-risk <remote-absolute-path>`。
+
+例如显式归档高风险远端路径时：
+
+```bash
+python scripts/remote-safe-delete.py archive-path \
+  --ssh-target <ssh-target> \
+  --remote-path <remote-absolute-path> \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose> \
+  --confirm-high-risk <remote-absolute-path>
 ```
 
 ## 运行依赖
@@ -136,11 +210,28 @@ metadata JSON 示例：
 - 如果归档对象被手动删除，后续命令会自动清理对应 metadata JSON。
 - 即使删除目标只是为了完成最终交付物而产生的中间文件、临时文件、缓存文件或转换源文件，也不得直接使用 `rm`，仍然必须走归档。
 - 删除目标不明确时先澄清；命中 `.env`、凭据、系统路径、仓库根目录或大范围批量删除时才再次确认。
+- 远端脚本会拒绝空路径、`/`、`.`、`..`、包含 `..` 的路径、glob 风格路径、归档根自身和归档根内部路径。
+- 远端归档根目录通过 `--remote-archive-root` 或 `ASD_REMOTE_ARCHIVE_ROOT` 控制，命令行参数优先；推荐通用值为 `~/.agent-safe-delete`。
+- 测试根目录保护时只使用字符串校验和临时 fake remote root，不能对真实系统根目录执行移动操作。
+
+## 远端归档批次结构
+
+```text
+<remote-archive-root>/<env>/<timestamp>-<purpose>/
+  manifest.json
+  verify-before.txt
+  verify-after.txt
+  restore.sh
+  payload/
+```
+
+`manifest.json` 记录原路径、归档路径、类型、大小、权限、属主、mtime、checksum、风险等级、环境名、计划 hash 和恢复命令。敏感文件只记录元数据，不输出内容。
 
 ## 本地验证
 
 ```bash
 ./tests/smoke.sh
+python scripts/remote-safe-delete.py --help
 ```
 
 这个测试会在临时目录里验证：
@@ -151,6 +242,11 @@ metadata JSON 示例：
 - broken symlink 归档与恢复
 - metadata JSON 生成
 - 失效 metadata 自动清理
+- 远端删除计划解析
+- 根目录和宽泛路径拒绝
+- fake remote root 归档与恢复说明生成
+- 测试/生产环境门禁
+- 高风险远端路径精确确认
 
 ## 许可证
 
