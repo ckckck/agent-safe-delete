@@ -41,8 +41,10 @@ agent-safe-delete/
   SKILL.md
   scripts/
     agent-safe-delete.py
+    remote-safe-delete.py
   tests/
     test_agent_safe_delete.py
+    test_remote_safe_delete.py
     smoke.sh
 ```
 
@@ -69,6 +71,78 @@ python scripts/agent-safe-delete.py archive ./example.txt
 python scripts/agent-safe-delete.py archive ./build --json
 python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m
 python scripts/agent-safe-delete.py restore ASD-20260401-101530-8f3k2m --to ./restored.txt
+```
+
+### 3. Remote server safe archive
+
+Remote archiving does not pass `ssh:` paths to the local archive command. It creates an archive batch on the target server and moves the remote object there. The tool does not embed real hosts, users, project paths, domains, or credentials; hosts and project roots are passed as arguments, and the archive root comes from `--remote-archive-root` or the `ASD_REMOTE_ARCHIVE_ROOT` environment variable.
+
+`--remote-archive-root` takes precedence over `ASD_REMOTE_ARCHIVE_ROOT`. If neither is provided, the remote archive command fails instead of guessing a project- or server-specific directory. The recommended generic value is:
+
+```bash
+export ASD_REMOTE_ARCHIVE_ROOT="~/.agent-safe-delete"
+```
+
+In SSH mode, `~/.agent-safe-delete` is expanded by the target server for the current SSH user, so different servers or login users naturally use their own home directories. The safe-delete skill does not depend on project-specific server-management skills to determine the archive root; project skills can provide the SSH target and project root, while this generic environment variable or explicit argument controls the archive root.
+
+Create a delete plan before `rsync --delete`:
+
+```bash
+python scripts/remote-safe-delete.py plan-rsync-delete \
+  --dry-run-output <dry-run-output.txt> \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose> \
+  --output <plan.json>
+```
+
+The script can also run the dry run:
+
+```bash
+python scripts/remote-safe-delete.py plan-rsync-delete \
+  --rsync-source <local-source>/ \
+  --rsync-destination <ssh-target>:<remote-project-root>/ \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose> \
+  --output <plan.json>
+```
+
+Archive the planned remote delete list:
+
+```bash
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json>
+```
+
+Archive one explicit remote path:
+
+```bash
+python scripts/remote-safe-delete.py archive-path \
+  --ssh-target <ssh-target> \
+  --remote-path <remote-absolute-path> \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose>
+```
+
+Production is stricter: `plan-rsync-delete` requires `--source-git-ref <commit-or-tag>`, and `archive-list` requires `--confirm-plan <plan_sha256>`. High-risk paths also require exact `--confirm-high-risk <remote-absolute-path>` confirmations.
+
+For example, when explicitly archiving a high-risk remote path:
+
+```bash
+python scripts/remote-safe-delete.py archive-path \
+  --ssh-target <ssh-target> \
+  --remote-path <remote-absolute-path> \
+  --env test \
+  --remote-project-root <remote-project-root> \
+  --remote-archive-root <remote-archive-root> \
+  --purpose <purpose> \
+  --confirm-high-risk <remote-absolute-path>
 ```
 
 ## Runtime Requirements
@@ -138,11 +212,28 @@ Example metadata JSON:
 - If archived objects are manually removed, stale metadata is automatically cleaned up later.
 - Even when the target exists only as an intermediate file, temporary file, cache file, or conversion source file created to produce a final deliverable, the agent must not use direct `rm`; it must still archive the target.
 - Ambiguous delete targets must be clarified first; only high-risk targets such as `.env`, credentials, system paths, repository roots, or large batch deletions require an extra confirmation.
+- The remote script rejects empty paths, `/`, `.`, `..`, paths containing `..`, glob-like paths, the archive root itself, and paths inside the archive root.
+- The remote archive root is controlled by `--remote-archive-root` or `ASD_REMOTE_ARCHIVE_ROOT`, with the CLI argument taking precedence; the recommended generic value is `~/.agent-safe-delete`.
+- Root-directory tests use string validation and a temporary fake remote root only; they must never move real system directories.
+
+## Remote Archive Batch Layout
+
+```text
+<remote-archive-root>/<env>/<timestamp>-<purpose>/
+  manifest.json
+  verify-before.txt
+  verify-after.txt
+  restore.sh
+  payload/
+```
+
+`manifest.json` records original paths, archived paths, types, sizes, modes, owners, mtimes, checksums, risk levels, environment, plan hash, and restore commands. Sensitive files only expose metadata, never contents.
 
 ## Local Verification
 
 ```bash
 ./tests/smoke.sh
+python scripts/remote-safe-delete.py --help
 ```
 
 The smoke test verifies:
@@ -153,6 +244,11 @@ The smoke test verifies:
 - broken symlink archive and restore
 - metadata JSON generation
 - stale metadata auto-pruning
+- remote delete plan parsing
+- root and broad path rejection
+- fake remote root archive and restore instruction generation
+- test and production environment gates
+- exact confirmation for high-risk remote paths
 
 ## License
 
