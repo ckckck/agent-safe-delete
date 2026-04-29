@@ -148,19 +148,35 @@ python scripts/remote-safe-delete.py plan-rsync-delete \
 ```bash
 python scripts/remote-safe-delete.py archive-list \
   --ssh-target <ssh-target> \
-  --plan <plan.json>
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256>
 ```
 
 显式归档单个远端目标：
 
 ```bash
-python scripts/remote-safe-delete.py archive-path \
-  --ssh-target <ssh-target> \
+python scripts/remote-safe-delete.py plan-path \
   --remote-path <remote-absolute-path> \
   --env test \
   --remote-project-root <remote-project-root> \
   --remote-archive-root <remote-archive-root> \
-  --purpose <purpose>
+  --purpose <purpose> \
+  --output <plan.json>
+
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256>
+```
+
+高风险远端路径必须同时提供计划确认和逐路径精确确认：
+
+```bash
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256> \
+  --confirm-high-risk <remote-absolute-path>
 ```
 
 ## 执行约定
@@ -189,7 +205,7 @@ python scripts/remote-safe-delete.py archive-path \
 | 场景 | 是否依赖代码库对比 | 正确处理 |
 | --- | --- | --- |
 | 同步差异清理，例如 `rsync --delete` 前发现远端多余文件 | 是 | 先用 dry-run 得到将删除清单，再逐项远端归档，最后才允许真正同步 |
-| 显式远端目标归档，例如用户指定删除服务器上的临时脚本、旧静态页、旧配置备份或旧 release | 否 | 先确认绝对路径和风险等级，再远端取证、归档、生成恢复说明 |
+| 显式远端目标归档，例如用户指定删除服务器上的临时脚本、旧静态页、旧配置备份或旧 release | 否 | 先用 `plan-path` 生成计划，再用 `archive-list --confirm-plan <plan_sha256>` 远端取证、归档、生成恢复说明 |
 
 远端归档最小流程：
 
@@ -201,7 +217,7 @@ python scripts/remote-safe-delete.py archive-path \
 6. 生成或记录恢复命令；高风险对象必须能说明如何恢复原路径、权限和属主。
 7. 验证原路径已消失、归档对象存在，再继续后续同步、构建或重启。
 
-远端脚本会拒绝空路径、`/`、`.`、`..`、包含 `..` 的路径、glob 风格路径、归档根自身和归档根内部路径。测试里的根目录场景只通过字符串校验和临时 fake remote root 验证；不得对真实 `/`、`/tmp`、`/var`、`/home`、`/root` 等系统目录执行移动测试。
+远端脚本会拒绝空路径、`/`、`.`、`..`、包含 `..` 的路径、glob 风格路径、归档根自身和归档根内部路径。测试里的根目录场景只通过字符串校验和临时 fake remote root 验证；不得对真实 `/`、`/tmp`、`/var`、`/home`、`/root` 等系统目录执行移动测试。本地模拟远端时，`--local-remote-root` 不能指向真实 `/`、用户 home、仓库根目录、配置的归档根目录或系统关键目录；测试必须使用临时 fake remote root。
 
 风险分级：
 
@@ -213,7 +229,7 @@ python scripts/remote-safe-delete.py archive-path \
 
 高风险路径必须使用精确路径确认，例如 `--confirm-high-risk <remote-absolute-path>`；不能用 `all` 或批量确认代替逐项确认。
 
-远端生产环境额外要求：源码发布或目录清理必须有明确版本、回退路径和验证步骤；不要从 dirty worktree 触发生产清理。`prod` 计划必须带 `--source-git-ref <commit-or-tag>`，执行 `archive-list` 时必须带 `--confirm-plan <plan_sha256>`。测试环境也必须先归档再删除，但可以在清单明确且风险门禁通过时更快执行。
+远端安全归档工具层统一使用严格可恢复模式：`test` 和 `prod` 只作为环境身份、归档目录分组和审计字段，不决定门禁强弱。所有远端归档执行都必须先生成带 `plan_sha256` 的计划，并在执行 `archive-list` 时显式提供 `--confirm-plan <plan_sha256>`。高风险路径仍必须逐项提供精确的 `--confirm-high-risk <remote-absolute-path>`。`--source-git-ref` 仅作为可选审计字段保留；具体项目若要求正式环境稳定 commit/tag、回退预案、发布窗口或人工确认，应由项目环境治理技能负责，不应变成安全归档工具内部的另一套执行逻辑。
 
 远端归档批次结构：
 
@@ -273,7 +289,7 @@ python scripts/remote-safe-delete.py archive-path \
 | `rm -rf <path>` / `rmdir <path>` / `unlink <path>` | 改为 `archive <path>` |
 | `rsync --delete` 到远端目录 | 先 dry-run 生成远端将删除清单，再远端归档清单对象，最后才执行同步 |
 | `ssh host 'rm ...'` 或远端覆盖式清理 | 改为远端取证、远端归档、验证后再继续 |
-| 删除代码库里不存在的远端文件 | 走“显式远端目标归档”，不要求本地代码库中存在对应路径 |
+| 删除代码库里不存在的远端文件 | 走 `plan-path` + `archive-list --confirm-plan <plan_sha256>`，不要求本地代码库中存在对应路径 |
 | 删除远端 `.env`、密钥、证书、上传目录、项目根目录 | 先单独说明风险，再用精确路径确认后才允许归档 |
 | 删除本地/远端分支 | 不归档；说明范围，按版本协作风险规则确认 |
 
@@ -282,7 +298,7 @@ python scripts/remote-safe-delete.py archive-path \
 - 用户说“删除这个旧 worktree”：Agent 应先识别这是目录删除语义，归档 worktree 路径，再清理 Git worktree 元数据；不应直接执行 `git worktree remove`。
 - 用户说“删除 worktree，分支也删掉”：Agent 应把目录删除和分支删除拆开处理，先归档目录并清理 worktree 元数据，再按版本协作风险规则删除本地/远端分支。
 - 用户说“用 `rsync --delete` 同步服务器目录”：Agent 应先生成远端将被删除的清单，归档这些远端对象，再执行真正同步；不应把 `--delete` 当作普通同步参数。
-- 用户说“删除服务器上这个临时文件，它不在代码库里”：Agent 应走显式远端目标归档；不应因为本地仓库没有对应文件而跳过安全归档。
+- 用户说“删除服务器上这个临时文件，它不在代码库里”：Agent 应走 `plan-path` + `archive-list --confirm-plan <plan_sha256>`；不应因为本地仓库没有对应文件而跳过安全归档。
 
 ## 保护规则
 
@@ -333,5 +349,6 @@ python scripts/remote-safe-delete.py <subcommand> [args]
 支持的子命令：
 
 - `plan-rsync-delete`
+- `plan-path`
 - `archive-list`
-- `archive-path`
+- `archive-path`（兼容入口；直接执行会失败并提示改用 `plan-path` + `archive-list`）

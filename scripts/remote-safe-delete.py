@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,11 +23,13 @@ class UsageError(ValueError):
 
 RISK_ORDER = {"low": 1, "medium": 2, "high": 3}
 REMOTE_ARCHIVE_ROOT_ENV = "ASD_REMOTE_ARCHIVE_ROOT"
+PURPOSE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 
 REMOTE_PAYLOAD_BOOTSTRAP = r'''
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -37,38 +40,50 @@ class RemoteArchiveError(Exception):
     pass
 
 
+PURPOSE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+
+
 def fail(message):
     raise RemoteArchiveError(message)
 
 
 def validate_remote_absolute_path(path):
-    value = str(path).strip()
-    if not value.startswith("/"):
-        fail(f"remote path must be absolute: {path!r}")
-    if value in {"", "/", ".", ".."}:
+    raw_value = str(path).strip()
+    if not raw_value.startswith("/") or raw_value.startswith("//"):
+        fail(f"remote path must be absolute and canonical: {path!r}")
+    if raw_value.endswith("//"):
+        fail(f"refusing non-canonical remote path: {path!r}")
+    value = raw_value.rstrip("/")
+    if value in {"", "/"}:
         fail(f"refusing unsafe remote path: {path!r}")
-    if any(part == ".." for part in value.split("/")):
-        fail(f"refusing path traversal: {path!r}")
+    if any(part in {"", ".", ".."} for part in value.split("/")[1:]):
+        fail(f"refusing non-canonical remote path: {path!r}")
     if any(ch in value for ch in "*?[]"):
         fail(f"refusing glob-like remote path: {path!r}")
-    return value.rstrip("/")
+    return value
 
 
 def validate_archive_root(path):
     raw_value = str(path).strip()
-    if raw_value == "~":
+    if raw_value == "~" or raw_value.startswith("~//") or raw_value.endswith("/"):
         fail("remote archive root cannot be ~")
     if raw_value.startswith("~/"):
         suffix_parts = raw_value[2:].split("/")
-        if any(part == ".." for part in suffix_parts):
-            fail(f"refusing path traversal: {path!r}")
+        if any(part in {"", ".", ".."} for part in suffix_parts):
+            fail(f"refusing non-canonical remote path: {path!r}")
         if any(ch in raw_value for ch in "*?[]"):
             fail(f"refusing glob-like remote path: {path!r}")
+        return raw_value
     expanded = os.path.expanduser(raw_value)
     value = validate_remote_absolute_path(expanded)
-    if value == "/":
-        fail("remote archive root cannot be /")
     return value
+
+
+def validate_purpose(value):
+    purpose = str(value).strip()
+    if not PURPOSE_RE.fullmatch(purpose):
+        fail("purpose must be a safe slug: letters, digits, dot, underscore, hyphen")
+    return purpose
 
 
 def remote_join(root, *parts):
@@ -158,6 +173,10 @@ def archive_paths(request):
     if env not in {"test", "prod"}:
         fail("env must be test or prod")
     archive_root = validate_archive_root(request["remote_archive_root"])
+    purpose = validate_purpose(request["purpose"])
+    plan_sha256 = str(request.get("plan_sha256") or "")
+    if not plan_sha256:
+        fail("remote archive execution requires plan_sha256")
     remote_paths = [validate_remote_absolute_path(path) for path in request["remote_paths"]]
     for path in remote_paths:
         if path == archive_root or path.startswith(f"{archive_root}/"):
@@ -168,28 +187,35 @@ def archive_paths(request):
         if not (local_path.exists() or local_path.is_symlink()):
             fail(f"remote path does not exist: {remote_path}")
         preflight.append((remote_path, local_path, capture_metadata(local_path, request["remote_project_root"])))
-    batch_dir = remote_join(archive_root, env, f"{batch_timestamp()}-{request['purpose']}")
+    batch_dir = remote_join(archive_root, env, f"{batch_timestamp()}-{purpose}")
     payload_dir = remote_join(batch_dir, "payload")
     Path(payload_dir).mkdir(parents=True, exist_ok=False)
     archived_items = []
     for index, (remote_path, local_path, metadata) in enumerate(preflight, start=1):
         destination = remote_join(payload_dir, f"{index:04d}-{local_path.name or 'root'}")
         shutil.move(str(local_path), destination)
+        destination_path = Path(destination)
+        source_missing = not (local_path.exists() or local_path.is_symlink())
+        archive_exists = destination_path.exists() or destination_path.is_symlink()
+        if not source_missing or not archive_exists:
+            fail(f"archive verification failed for {remote_path}")
         metadata["archived_path"] = destination
         metadata["restore_command"] = f"mkdir -p {sh_quote(os.path.dirname(remote_path))} && mv {sh_quote(destination)} {sh_quote(remote_path)}"
+        metadata["verified_source_missing"] = source_missing
+        metadata["verified_archive_exists"] = archive_exists
         archived_items.append(metadata)
     manifest = {
         "schema_version": 1,
         "source_mode": request["source_mode"],
         "created_at": current_utc_timestamp(),
         "env": env,
-        "purpose": request["purpose"],
+        "purpose": purpose,
         "remote_project_root": request["remote_project_root"],
         "remote_archive_root": archive_root,
         "batch_dir": batch_dir,
         "payload_dir": payload_dir,
         "source_git_ref": request.get("source_git_ref"),
-        "plan_sha256": request.get("plan_sha256"),
+        "plan_sha256": plan_sha256,
         "risk_level": highest_risk(archived_items),
         "items": archived_items,
     }
@@ -238,33 +264,41 @@ def validate_delete_entry(entry: str) -> str:
 
 
 def validate_remote_absolute_path(path: str) -> str:
-    value = path.strip()
-    if not value.startswith("/"):
-        raise PathSafetyError(f"remote path must be absolute: {path!r}")
-    if value in {"", "/", ".", ".."}:
+    raw_value = path.strip()
+    if not raw_value.startswith("/") or raw_value.startswith("//"):
+        raise PathSafetyError(f"remote path must be absolute and canonical: {path!r}")
+    if raw_value.endswith("//"):
+        raise PathSafetyError(f"refusing non-canonical remote path: {path!r}")
+    value = raw_value.rstrip("/")
+    if value in {"", "/"}:
         raise PathSafetyError(f"refusing unsafe remote path: {path!r}")
-    if any(part == ".." for part in value.split("/")):
-        raise PathSafetyError(f"refusing path traversal: {path!r}")
+    if any(part in {"", ".", ".."} for part in value.split("/")[1:]):
+        raise PathSafetyError(f"refusing non-canonical remote path: {path!r}")
     if any(ch in value for ch in "*?[]"):
         raise PathSafetyError(f"refusing glob-like remote path: {path!r}")
-    return value.rstrip("/") if value != "/" else value
+    return value
 
 
 def validate_archive_root(path: str) -> str:
     raw_value = path.strip()
-    if raw_value == "~":
+    if raw_value == "~" or raw_value.startswith("~//") or raw_value.endswith("/"):
         raise PathSafetyError("remote archive root cannot be ~")
     if raw_value.startswith("~/"):
         suffix_parts = raw_value[2:].split("/")
-        if any(part == ".." for part in suffix_parts):
-            raise PathSafetyError(f"refusing path traversal: {path!r}")
+        if any(part in {"", ".", ".."} for part in suffix_parts):
+            raise PathSafetyError(f"refusing non-canonical remote path: {path!r}")
         if any(ch in raw_value for ch in "*?[]"):
             raise PathSafetyError(f"refusing glob-like remote path: {path!r}")
-        return raw_value.rstrip("/")
+        return raw_value
     value = validate_remote_absolute_path(raw_value)
-    if value == "/":
-        raise PathSafetyError("remote archive root cannot be /")
     return value
+
+
+def validate_purpose(value: str) -> str:
+    purpose = str(value).strip()
+    if not PURPOSE_RE.fullmatch(purpose):
+        raise UsageError("purpose must be a safe slug: letters, digits, dot, underscore, hyphen")
+    return purpose
 
 
 def remote_archive_root_from_args(args: argparse.Namespace) -> str:
@@ -274,10 +308,47 @@ def remote_archive_root_from_args(args: argparse.Namespace) -> str:
     return validate_archive_root(remote_archive_root)
 
 
+def configured_local_archive_roots() -> list[Path]:
+    roots: list[Path] = []
+    for name in ("ASD_SAFE_ARCHIVE_ROOT", REMOTE_ARCHIVE_ROOT_ENV):
+        value = os.environ.get(name)
+        if value and not value.startswith("/") and not value.startswith("~"):
+            continue
+        if value:
+            roots.append(Path(value).expanduser().resolve())
+    return roots
+
+
+def is_same_or_nested(path: Path, candidate: Path) -> bool:
+    return path == candidate or candidate in path.parents
+
+
+def validate_local_remote_root(local_remote_root: Path | str) -> Path:
+    root = Path(local_remote_root).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise PathSafetyError(f"local remote root must be an existing directory: {local_remote_root!r}")
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if root == Path("/").resolve():
+        raise PathSafetyError("refusing dangerous local remote root: /")
+
+    dangerous_roots = [Path.home().resolve(), repo_root.resolve()]
+    dangerous_roots.extend(configured_local_archive_roots())
+    for dangerous in dangerous_roots:
+        if is_same_or_nested(root, dangerous):
+            raise PathSafetyError(f"refusing dangerous local remote root: {root}")
+
+    for system_root in (Path("/tmp"), Path("/var"), Path("/home"), Path("/root")):
+        resolved = system_root.resolve()
+        if root == resolved:
+            raise PathSafetyError(f"refusing system directory as local remote root: {root}")
+    return root
+
+
 def map_remote_path(local_remote_root: Path | str, remote_path: str) -> Path:
     safe_remote_path = validate_remote_absolute_path(remote_path)
     relative_path = safe_remote_path.lstrip("/")
-    root = Path(local_remote_root).resolve()
+    root = validate_local_remote_root(local_remote_root)
     mapped = (root / relative_path).resolve()
     if root != mapped and root not in mapped.parents:
         raise PathSafetyError(f"mapped path escapes fake remote root: {remote_path!r}")
@@ -359,6 +430,13 @@ def canonical_plan_hash(plan: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def require_plan_sha256(plan_sha256: str | None) -> str:
+    value = str(plan_sha256 or "")
+    if not value:
+        raise UsageError("remote archive execution requires plan_sha256")
+    return value
+
+
 def build_rsync_delete_plan(
     *,
     dry_run_output: str,
@@ -370,12 +448,13 @@ def build_rsync_delete_plan(
 ) -> dict[str, object]:
     if env not in {"test", "prod"}:
         raise UsageError("env must be test or prod")
-    if env == "prod" and not source_git_ref:
-        raise UsageError("prod requires source_git_ref")
+    safe_project_root = validate_remote_absolute_path(remote_project_root)
+    safe_archive_root = validate_archive_root(remote_archive_root)
+    safe_purpose = validate_purpose(purpose)
 
     entries = normalize_delete_entries(parse_rsync_deletions(dry_run_output))
     items = [
-        {"path": entry, "risk": classify_risk(entry, remote_project_root)}
+        {"path": entry, "risk": classify_risk(entry, safe_project_root)}
         for entry in entries
     ]
     plan: dict[str, object] = {
@@ -383,9 +462,47 @@ def build_rsync_delete_plan(
         "source_mode": "rsync-delete-plan",
         "created_at": current_utc_timestamp(),
         "env": env,
-        "purpose": purpose,
-        "remote_project_root": remote_project_root,
-        "remote_archive_root": remote_archive_root,
+        "purpose": safe_purpose,
+        "remote_project_root": safe_project_root,
+        "remote_archive_root": safe_archive_root,
+        "source_git_ref": source_git_ref,
+        "risk_level": highest_risk(items),
+        "items": items,
+    }
+    plan["plan_sha256"] = canonical_plan_hash(plan)
+    return plan
+
+
+def ensure_path_outside_archive_root(remote_path: str, remote_archive_root: str) -> None:
+    if remote_path == remote_archive_root or remote_path.startswith(f"{remote_archive_root}/"):
+        raise PathSafetyError(f"refusing to archive path inside archive root: {remote_path!r}")
+
+
+def build_explicit_path_plan(
+    *,
+    remote_path: str,
+    env: str,
+    remote_project_root: str,
+    remote_archive_root: str,
+    purpose: str,
+    source_git_ref: str | None = None,
+) -> dict[str, object]:
+    if env not in {"test", "prod"}:
+        raise UsageError("env must be test or prod")
+    safe_project_root = validate_remote_absolute_path(remote_project_root)
+    safe_archive_root = validate_archive_root(remote_archive_root)
+    safe_purpose = validate_purpose(purpose)
+    safe_remote_path = validate_remote_absolute_path(remote_path)
+    ensure_path_outside_archive_root(safe_remote_path, safe_archive_root)
+    items = [{"path": safe_remote_path, "risk": classify_risk(safe_remote_path, safe_project_root)}]
+    plan: dict[str, object] = {
+        "schema_version": 1,
+        "source_mode": "explicit-path-plan",
+        "created_at": current_utc_timestamp(),
+        "env": env,
+        "purpose": safe_purpose,
+        "remote_project_root": safe_project_root,
+        "remote_archive_root": safe_archive_root,
         "source_git_ref": source_git_ref,
         "risk_level": highest_risk(items),
         "items": items,
@@ -451,24 +568,26 @@ def archive_items_local(
     if env not in {"test", "prod"}:
         raise UsageError("env must be test or prod")
     safe_archive_root = validate_archive_root(remote_archive_root)
+    safe_project_root = validate_remote_absolute_path(remote_project_root)
+    safe_purpose = validate_purpose(purpose)
+    safe_plan_sha256 = require_plan_sha256(plan_sha256)
 
     preflight: list[tuple[str, Path, dict[str, object]]] = []
     for remote_path in remote_paths:
         safe_remote_path = validate_remote_absolute_path(remote_path)
-        if safe_remote_path == safe_archive_root or safe_remote_path.startswith(f"{safe_archive_root}/"):
-            raise PathSafetyError(f"refusing to archive path inside archive root: {remote_path!r}")
+        ensure_path_outside_archive_root(safe_remote_path, safe_archive_root)
         local_path = map_remote_path(local_remote_root, safe_remote_path)
         if not (local_path.exists() or local_path.is_symlink()):
             raise UsageError(f"remote path does not exist in fake root: {safe_remote_path}")
-        preflight.append((safe_remote_path, local_path, capture_metadata(local_path, safe_remote_path, remote_project_root)))
+        preflight.append((safe_remote_path, local_path, capture_metadata(local_path, safe_remote_path, safe_project_root)))
 
     ensure_high_risk_confirmations(
         remote_paths=[remote_path for remote_path, _, _ in preflight],
-        remote_project_root=remote_project_root,
+        remote_project_root=safe_project_root,
         confirm_high_risk=confirm_high_risk,
     )
 
-    batch_name = f"{batch_timestamp()}-{purpose}"
+    batch_name = f"{batch_timestamp()}-{safe_purpose}"
     remote_batch_dir = remote_join(safe_archive_root, env, batch_name)
     remote_payload_dir = remote_join(remote_batch_dir, "payload")
     local_batch_dir = map_remote_path(local_remote_root, remote_batch_dir)
@@ -481,8 +600,14 @@ def archive_items_local(
         local_destination = local_payload_dir / destination_name
         remote_destination = remote_join(remote_payload_dir, destination_name)
         shutil.move(str(local_path), str(local_destination))
+        source_missing = not (local_path.exists() or local_path.is_symlink())
+        archive_exists = local_destination.exists() or local_destination.is_symlink()
+        if not source_missing or not archive_exists:
+            raise UsageError(f"archive verification failed for {safe_remote_path}")
         metadata["archived_path"] = remote_destination
         metadata["restore_command"] = f"mkdir -p {sh_quote(os.path.dirname(safe_remote_path))} && mv {sh_quote(remote_destination)} {sh_quote(safe_remote_path)}"
+        metadata["verified_source_missing"] = source_missing
+        metadata["verified_archive_exists"] = archive_exists
         archived_items.append(metadata)
 
     manifest: dict[str, object] = {
@@ -490,13 +615,13 @@ def archive_items_local(
         "source_mode": source_mode,
         "created_at": current_utc_timestamp(),
         "env": env,
-        "purpose": purpose,
-        "remote_project_root": remote_project_root,
+        "purpose": safe_purpose,
+        "remote_project_root": safe_project_root,
         "remote_archive_root": safe_archive_root,
         "batch_dir": remote_batch_dir,
         "payload_dir": remote_payload_dir,
         "source_git_ref": source_git_ref,
-        "plan_sha256": plan_sha256,
+        "plan_sha256": safe_plan_sha256,
         "risk_level": highest_risk(archived_items),
         "items": archived_items,
     }
@@ -534,8 +659,21 @@ def archive_explicit_path_local(
     source_git_ref: str | None = None,
     confirm_high_risk: list[str] | None = None,
 ) -> dict[str, object]:
-    if env == "prod" and not source_git_ref:
-        raise UsageError("prod requires source_git_ref")
+    raise UsageError("explicit remote archive execution requires plan_sha256; use plan-path then archive-list")
+
+
+def archive_explicit_path_local_with_plan(
+    *,
+    local_remote_root: Path | str,
+    remote_path: str,
+    env: str,
+    remote_project_root: str,
+    remote_archive_root: str,
+    purpose: str,
+    plan_sha256: str,
+    source_git_ref: str | None = None,
+    confirm_high_risk: list[str] | None = None,
+) -> dict[str, object]:
     return archive_items_local(
         local_remote_root=local_remote_root,
         remote_paths=[remote_path],
@@ -545,6 +683,7 @@ def archive_explicit_path_local(
         purpose=purpose,
         source_mode="explicit-path",
         source_git_ref=source_git_ref,
+        plan_sha256=plan_sha256,
         confirm_high_risk=confirm_high_risk,
     )
 
@@ -573,14 +712,13 @@ def archive_paths_ssh(
 ) -> dict[str, object]:
     if env not in {"test", "prod"}:
         raise UsageError("env must be test or prod")
-    if env == "prod" and not source_git_ref:
-        raise UsageError("prod requires source_git_ref")
     safe_archive_root = validate_archive_root(remote_archive_root)
+    safe_project_root = validate_remote_absolute_path(remote_project_root)
+    safe_purpose = validate_purpose(purpose)
+    safe_plan_sha256 = require_plan_sha256(plan_sha256)
     safe_paths = [validate_remote_absolute_path(path) for path in remote_paths]
     for path in safe_paths:
-        if path == safe_archive_root or path.startswith(f"{safe_archive_root}/"):
-            raise PathSafetyError(f"refusing to archive path inside archive root: {path!r}")
-    safe_project_root = validate_remote_absolute_path(remote_project_root)
+        ensure_path_outside_archive_root(path, safe_archive_root)
     ensure_high_risk_confirmations(
         remote_paths=safe_paths,
         remote_project_root=safe_project_root,
@@ -593,10 +731,10 @@ def archive_paths_ssh(
         "env": env,
         "remote_project_root": safe_project_root,
         "remote_archive_root": safe_archive_root,
-        "purpose": purpose,
+        "purpose": safe_purpose,
         "source_mode": source_mode,
         "source_git_ref": source_git_ref,
-        "plan_sha256": plan_sha256,
+        "plan_sha256": safe_plan_sha256,
     }
     command = ["ssh", ssh_target, "python3", "-c", REMOTE_PAYLOAD_BOOTSTRAP]
     completed = runner(command, input_text=json.dumps(request, ensure_ascii=False, sort_keys=True))
@@ -617,6 +755,22 @@ def archive_explicit_path_ssh(
     confirm_high_risk: list[str] | None = None,
     runner=run_subprocess,
 ) -> dict[str, object]:
+    raise UsageError("explicit remote archive execution requires plan_sha256; use plan-path then archive-list")
+
+
+def archive_explicit_path_ssh_with_plan(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    env: str,
+    remote_project_root: str,
+    remote_archive_root: str,
+    purpose: str,
+    plan_sha256: str,
+    source_git_ref: str | None = None,
+    confirm_high_risk: list[str] | None = None,
+    runner=run_subprocess,
+) -> dict[str, object]:
     return archive_paths_ssh(
         ssh_target=ssh_target,
         remote_paths=[remote_path],
@@ -626,6 +780,7 @@ def archive_explicit_path_ssh(
         purpose=purpose,
         source_mode="explicit-path",
         source_git_ref=source_git_ref,
+        plan_sha256=plan_sha256,
         confirm_high_risk=confirm_high_risk,
         runner=runner,
     )
@@ -659,14 +814,17 @@ def ensure_environment_gates(
     env = str(plan.get("env", ""))
     if env not in {"test", "prod"}:
         raise UsageError("plan env must be test or prod")
-    if env == "prod":
-        if not plan.get("source_git_ref"):
-            raise UsageError("prod requires source_git_ref")
-        expected_hash = str(plan.get("plan_sha256", ""))
-        if not confirm_plan:
-            raise UsageError("prod archive-list requires confirm_plan")
-        if confirm_plan != expected_hash:
-            raise UsageError("confirm_plan does not match plan_sha256")
+
+    expected_hash = str(plan.get("plan_sha256", ""))
+    if not expected_hash:
+        raise UsageError("plan requires plan_sha256")
+    actual_hash = canonical_plan_hash(plan)
+    if actual_hash != expected_hash:
+        raise UsageError("plan_sha256 does not match plan content")
+    if not confirm_plan:
+        raise UsageError("archive-list requires confirm_plan")
+    if confirm_plan != expected_hash:
+        raise UsageError("confirm_plan does not match plan_sha256")
 
     confirmed = set(confirm_high_risk or [])
     missing = [path for path in high_risk_paths(plan) if path not in confirmed]
@@ -690,7 +848,7 @@ def archive_plan_local(
         remote_project_root=str(plan["remote_project_root"]),
         remote_archive_root=str(plan["remote_archive_root"]),
         purpose=str(plan["purpose"]),
-        source_mode="rsync-delete-plan",
+        source_mode=str(plan.get("source_mode", "archive-plan")),
         source_git_ref=str(plan["source_git_ref"]) if plan.get("source_git_ref") else None,
         plan_sha256=str(plan.get("plan_sha256", "")),
         confirm_high_risk=confirm_high_risk,
@@ -739,39 +897,28 @@ def command_plan_rsync_delete(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_archive_path(args: argparse.Namespace) -> int:
+def command_plan_path(args: argparse.Namespace) -> int:
     remote_archive_root = remote_archive_root_from_args(args)
-    if args.local_remote_root:
-        result = archive_explicit_path_local(
-            local_remote_root=Path(args.local_remote_root),
-            remote_path=args.remote_path,
-            env=args.env,
-            remote_project_root=args.remote_project_root,
-            remote_archive_root=remote_archive_root,
-            purpose=args.purpose,
-            source_git_ref=args.source_git_ref,
-            confirm_high_risk=args.confirm_high_risk or [],
-        )
-    elif args.ssh_target:
-        result = archive_explicit_path_ssh(
-            ssh_target=args.ssh_target,
-            remote_path=args.remote_path,
-            env=args.env,
-            remote_project_root=args.remote_project_root,
-            remote_archive_root=remote_archive_root,
-            purpose=args.purpose,
-            source_git_ref=args.source_git_ref,
-            confirm_high_risk=args.confirm_high_risk or [],
-        )
-    else:
-        raise UsageError("archive-path requires --local-remote-root or --ssh-target")
+    plan = build_explicit_path_plan(
+        remote_path=args.remote_path,
+        env=args.env,
+        remote_project_root=args.remote_project_root,
+        remote_archive_root=remote_archive_root,
+        purpose=args.purpose,
+        source_git_ref=args.source_git_ref,
+    )
+    if args.output:
+        Path(args.output).write_text(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if args.json:
-        print_json(result)
-    else:
-        print(f"archived {len(result['items'])} remote item(s)")
-        print(f"manifest: {result['manifest_path']}")
-        print(f"restore: {result['restore_script']}")
+        print_json(plan)
+    elif not args.output:
+        print("planned 1 remote archive item")
+        print(f"plan_sha256: {plan['plan_sha256']}")
     return 0
+
+
+def command_archive_path(args: argparse.Namespace) -> int:
+    raise UsageError("archive-path direct execution is disabled; use plan-path then archive-list --confirm-plan <plan_sha256>")
 
 
 def command_archive_list(args: argparse.Namespace) -> int:
@@ -792,9 +939,10 @@ def command_archive_list(args: argparse.Namespace) -> int:
             remote_project_root=str(plan["remote_project_root"]),
             remote_archive_root=str(plan["remote_archive_root"]),
             purpose=str(plan["purpose"]),
-            source_mode="rsync-delete-plan",
+            source_mode=str(plan.get("source_mode", "archive-plan")),
             source_git_ref=str(plan["source_git_ref"]) if plan.get("source_git_ref") else None,
             plan_sha256=str(plan.get("plan_sha256", "")),
+            confirm_high_risk=args.confirm_high_risk or [],
         )
     else:
         raise UsageError("archive-list requires --local-remote-root or --ssh-target")
@@ -819,6 +967,13 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument("--json", action="store_true")
     add_environment_args(plan_parser)
     plan_parser.set_defaults(func=command_plan_rsync_delete)
+
+    plan_path_parser = subparsers.add_parser("plan-path")
+    plan_path_parser.add_argument("--remote-path", required=True)
+    plan_path_parser.add_argument("--output")
+    plan_path_parser.add_argument("--json", action="store_true")
+    add_environment_args(plan_path_parser)
+    plan_path_parser.set_defaults(func=command_plan_path)
 
     archive_path_parser = subparsers.add_parser("archive-path")
     archive_path_parser.add_argument("--local-remote-root")

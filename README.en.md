@@ -115,33 +115,36 @@ Archive the planned remote delete list:
 ```bash
 python scripts/remote-safe-delete.py archive-list \
   --ssh-target <ssh-target> \
-  --plan <plan.json>
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256>
 ```
 
 Archive one explicit remote path:
 
 ```bash
-python scripts/remote-safe-delete.py archive-path \
-  --ssh-target <ssh-target> \
-  --remote-path <remote-absolute-path> \
-  --env test \
-  --remote-project-root <remote-project-root> \
-  --remote-archive-root <remote-archive-root> \
-  --purpose <purpose>
-```
-
-Production is stricter: `plan-rsync-delete` requires `--source-git-ref <commit-or-tag>`, and `archive-list` requires `--confirm-plan <plan_sha256>`. High-risk paths also require exact `--confirm-high-risk <remote-absolute-path>` confirmations.
-
-For example, when explicitly archiving a high-risk remote path:
-
-```bash
-python scripts/remote-safe-delete.py archive-path \
-  --ssh-target <ssh-target> \
+python scripts/remote-safe-delete.py plan-path \
   --remote-path <remote-absolute-path> \
   --env test \
   --remote-project-root <remote-project-root> \
   --remote-archive-root <remote-archive-root> \
   --purpose <purpose> \
+  --output <plan.json>
+
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256>
+```
+
+The remote safe-archive tool no longer has separate “loose test / strict production” behavior. `test` and `prod` are environment identities used for archive grouping and audit fields only; every remote archive execution must first generate a plan with `plan_sha256`, and `archive-list` must receive `--confirm-plan <plan_sha256>`. High-risk paths still require exact per-path `--confirm-high-risk <remote-absolute-path>` confirmations. `--source-git-ref` remains an optional audit field; project-level production requirements such as stable commits or tags, rollback plans, release windows, and human approvals belong in project environment governance, not in this generic safe-archive tool.
+
+For example, when explicitly archiving a high-risk remote path:
+
+```bash
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256> \
   --confirm-high-risk <remote-absolute-path>
 ```
 
@@ -214,6 +217,7 @@ Example metadata JSON:
 - Ambiguous delete targets must be clarified first; only high-risk targets such as `.env`, credentials, system paths, repository roots, or large batch deletions require an extra confirmation.
 - The remote script rejects empty paths, `/`, `.`, `..`, paths containing `..`, glob-like paths, the archive root itself, and paths inside the archive root.
 - The remote archive root is controlled by `--remote-archive-root` or `ASD_REMOTE_ARCHIVE_ROOT`, with the CLI argument taking precedence; the recommended generic value is `~/.agent-safe-delete`.
+- In local fake-remote mode, `--local-remote-root` cannot point at the real `/`, the user home directory, the repository root, configured archive roots, or critical system directories; tests must use a temporary fake remote root.
 - Root-directory tests use string validation and a temporary fake remote root only; they must never move real system directories.
 
 ## Remote Archive Batch Layout

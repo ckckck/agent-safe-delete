@@ -113,33 +113,36 @@ python scripts/remote-safe-delete.py plan-rsync-delete \
 ```bash
 python scripts/remote-safe-delete.py archive-list \
   --ssh-target <ssh-target> \
-  --plan <plan.json>
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256>
 ```
 
 显式归档某个远端路径：
 
 ```bash
-python scripts/remote-safe-delete.py archive-path \
-  --ssh-target <ssh-target> \
-  --remote-path <remote-absolute-path> \
-  --env test \
-  --remote-project-root <remote-project-root> \
-  --remote-archive-root <remote-archive-root> \
-  --purpose <purpose>
-```
-
-生产环境要求更严格：`plan-rsync-delete` 必须提供 `--source-git-ref <commit-or-tag>`，`archive-list` 必须提供 `--confirm-plan <plan_sha256>`。高风险路径还必须逐项提供 `--confirm-high-risk <remote-absolute-path>`。
-
-例如显式归档高风险远端路径时：
-
-```bash
-python scripts/remote-safe-delete.py archive-path \
-  --ssh-target <ssh-target> \
+python scripts/remote-safe-delete.py plan-path \
   --remote-path <remote-absolute-path> \
   --env test \
   --remote-project-root <remote-project-root> \
   --remote-archive-root <remote-archive-root> \
   --purpose <purpose> \
+  --output <plan.json>
+
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256>
+```
+
+远端安全归档工具层只保留一套统一严格行为，不再按环境提供两套松紧不同的门禁。`test` 和 `prod` 只用于环境身份、归档目录分组和审计字段；所有远端归档执行都必须先生成带 `plan_sha256` 的计划，并在 `archive-list` 中显式提供 `--confirm-plan <plan_sha256>`。高风险路径还必须逐项提供 `--confirm-high-risk <remote-absolute-path>`。`--source-git-ref` 仅作为可选审计字段保留；正式环境的稳定 commit/tag、回退预案、发布窗口和人工确认由项目环境治理流程负责。
+
+例如显式归档高风险远端路径时：
+
+```bash
+python scripts/remote-safe-delete.py archive-list \
+  --ssh-target <ssh-target> \
+  --plan <plan.json> \
+  --confirm-plan <plan_sha256> \
   --confirm-high-risk <remote-absolute-path>
 ```
 
@@ -212,6 +215,7 @@ metadata JSON 示例：
 - 删除目标不明确时先澄清；命中 `.env`、凭据、系统路径、仓库根目录或大范围批量删除时才再次确认。
 - 远端脚本会拒绝空路径、`/`、`.`、`..`、包含 `..` 的路径、glob 风格路径、归档根自身和归档根内部路径。
 - 远端归档根目录通过 `--remote-archive-root` 或 `ASD_REMOTE_ARCHIVE_ROOT` 控制，命令行参数优先；推荐通用值为 `~/.agent-safe-delete`。
+- 本地模拟远端时，`--local-remote-root` 不能指向真实 `/`、用户 home、仓库根目录、配置的归档根目录或系统关键目录；测试必须使用临时 fake remote root。
 - 测试根目录保护时只使用字符串校验和临时 fake remote root，不能对真实系统根目录执行移动操作。
 
 ## 远端归档批次结构
