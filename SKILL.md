@@ -1,6 +1,6 @@
 ---
 name: agent-safe-delete
-description: Use when a task involves archiving, removing, replacing, or cleaning up local or remote files or folders, including rsync --delete, SSH server cleanup, temporary files, generated artifacts, or explicit delete requests, and deletions should become reversible archive moves instead of permanent removal.
+description: Use when a task involves archiving, deleting, removing, replacing, or cleaning up local or remote files, folders, symlinks, Git worktrees, generated artifacts, temporary files, rsync --delete, SSH cleanup, git clean, git worktree remove, or phrases like 归档 worktree / 删除 worktree.
 ---
 
 # Agent Safe Delete
