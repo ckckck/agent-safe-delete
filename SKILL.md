@@ -262,41 +262,51 @@ python scripts/remote-safe-delete.py archive-list \
    ```bash
    git worktree prune --expire now
    ```
-4. 验证：
+4. 如果 worktree 绑定的是命名分支，归档 worktree 就视为完整清理授权；在确认该分支已合并到当前收尾目标分支后，不再询问用户，直接删除同名本地分支与远端分支：
+   ```bash
+   git merge-base --is-ancestor <feature-branch> HEAD
+   git branch -d <feature-branch>
+   git push origin --delete <feature-branch>
+   ```
+   如果远端分支不存在，记录为已不存在即可；如果分支未合并且用户没有明确说“丢弃/废弃”，停止并报告未合并风险。
+5. 验证：
    ```bash
    git worktree list --porcelain
    test ! -e <worktree-path>
+   git branch --list <feature-branch>
+   git ls-remote --heads origin <feature-branch>
    ```
 
 禁止做法：
 
 - 不要把 `git worktree remove <path>` 当作第一步。
 - 不要因为 worktree 干净、已合并、可重建，或命令是 Git 官方命令，就跳过归档。
-- 不要把“删除 worktree 目录”和“删除分支”混为一谈。
+- 不要在归档 worktree 后停在“只清理目录”的半完成状态；同名本地和远端分支也必须按本节规则清理。
 
 分支删除边界：
 
 - 删除本地或远端分支不是文件系统删除，不走 `archive`。
-- 远端分支删除属于版本协作风险操作，应单独说明删除范围并取得确认。
-- 如果用户同时要求删除 worktree 和分支，顺序是：归档 worktree 目录 → `git worktree prune --expire now` → 删除本地分支 → 删除远端分支。
+- 单独删除远端分支仍属于版本协作风险操作，应单独说明删除范围并取得确认。
+- 用户要求“归档/删除 worktree”时，已经授权清理该 worktree 绑定的同名本地和远端分支；确认已合并后直接执行，不再二次询问。
+- 顺序固定为：归档 worktree 目录 → `git worktree prune --expire now` → 删除本地分支 → 删除远端分支 → 验证本地/远端分支均不存在。
 
 ## 快速决策表
 
 | 用户/命令意图 | 正确处理 |
 | --- | --- |
-| `git worktree remove <path>` | 先 `archive <path>`，再 `git worktree prune --expire now` |
+| `git worktree remove <path>` | 先 `archive <path>`，再 `git worktree prune --expire now`，然后删除已合并的同名本地/远端分支 |
 | `git clean -fd` | 先列出候选对象，再逐项或按明确范围归档 |
 | `rm -rf <path>` / `rmdir <path>` / `unlink <path>` | 改为 `archive <path>` |
 | `rsync --delete` 到远端目录 | 先 dry-run 生成远端将删除清单，再远端归档清单对象，最后才执行同步 |
 | `ssh host 'rm ...'` 或远端覆盖式清理 | 改为远端取证、远端归档、验证后再继续 |
 | 删除代码库里不存在的远端文件 | 走 `plan-path` + `archive-list --confirm-plan <plan_sha256>`，不要求本地代码库中存在对应路径 |
 | 删除远端 `.env`、密钥、证书、上传目录、项目根目录 | 先单独说明风险，再用精确路径确认后才允许归档 |
-| 删除本地/远端分支 | 不归档；说明范围，按版本协作风险规则确认 |
+| 删除本地/远端分支 | 若来自 worktree 归档收尾且已合并，直接删；若是单独删分支，说明范围并确认 |
 
 ## 压力场景
 
-- 用户说“删除这个旧 worktree”：Agent 应先识别这是目录删除语义，归档 worktree 路径，再清理 Git worktree 元数据；不应直接执行 `git worktree remove`。
-- 用户说“删除 worktree，分支也删掉”：Agent 应把目录删除和分支删除拆开处理，先归档目录并清理 worktree 元数据，再按版本协作风险规则删除本地/远端分支。
+- 用户说“删除/归档这个旧 worktree”：Agent 应先识别这是目录删除语义，归档 worktree 路径，再清理 Git worktree 元数据；确认绑定分支已合并后，直接删除同名本地和远端分支，不再追问。
+- 用户说“删除 worktree，分支也删掉”：Agent 应把目录删除和分支删除拆开处理，先归档目录并清理 worktree 元数据，再直接删除本地/远端分支并验证为空。
 - 用户说“用 `rsync --delete` 同步服务器目录”：Agent 应先生成远端将被删除的清单，归档这些远端对象，再执行真正同步；不应把 `--delete` 当作普通同步参数。
 - 用户说“删除服务器上这个临时文件，它不在代码库里”：Agent 应走 `plan-path` + `archive-list --confirm-plan <plan_sha256>`；不应因为本地仓库没有对应文件而跳过安全归档。
 
