@@ -1,6 +1,6 @@
 ---
 name: agent-safe-delete
-description: Use when a task involves archiving, deleting, removing, replacing, or cleaning up local or remote files, folders, symlinks, Git worktrees, generated artifacts, temporary files, rsync --delete, SSH cleanup, git clean, git worktree remove, or phrases like 归档 worktree / 删除 worktree.
+description: Use when any local or remote filesystem object may be removed, cleaned, overwritten, replaced, pruned, or made disappear, including agent-created temp files/directories, mktemp scratch dirs, generated artifacts, Git worktrees, rsync --delete, SSH cleanup, git clean, rm/rmdir/unlink, find -delete, or phrases like 删除/清理/归档.
 ---
 
 # Agent Safe Delete
@@ -14,6 +14,19 @@ description: Use when a task involves archiving, deleting, removing, replacing, 
 当 Agent 在执行任务过程中，自行判断需要删除、替换、清理某个文件或目录时，也必须触发本技能，把删除语义改写为归档。
 
 ## 触发规则
+
+### 没有临时文件例外
+
+Agent 自己创建的临时目录、测试夹具、scratch 文件、一次性验证文件，只要接下来要从文件系统移除，也必须触发本技能。
+
+尤其禁止把下面这些情况当作例外：
+
+- `tmpdir=$(mktemp -d)` 后在同一条命令里直接清理 `$tmpdir`
+- `trap 'rm -rf "$tmpdir"' EXIT`
+- 生成空白测试文件、截图、转换中间文件后直接删除
+- 因为文件“刚创建、为空、可重建、不属于用户项目”就直接清理
+
+正确动作是：先停下来，把删除动作改写为安全归档。
 
 - 用户明确要求“归档”文件或文件夹时触发。
 - 用户要求删除文件或文件夹时也触发。
@@ -40,6 +53,34 @@ description: Use when a task involves archiving, deleting, removing, replacing, 
 - 转换或导出成功后删除源格式文件、缓存文件或一次性产物
 
 不要因为文件是 Agent 刚创建的、容易重建的、临时的、由工具管理的，或只是为了完成当前任务而生成的，就把它当作可以直接删除的例外。
+
+### 命令预检
+
+执行任何 shell 命令前，如果命令字符串包含这些删除语义，必须先触发本技能：
+
+- `rm`
+- `rm -rf`
+- `rmdir`
+- `unlink`
+- `find ... -delete`
+- `xargs rm`
+- `git clean`
+- `git worktree remove`
+- `rsync --delete`
+- `trap ... rm`
+- `mktemp -d` 与后续清理组合
+
+如果创建临时目录只是为了验证，应拆成三步：创建、验证、归档。不要把创建和删除塞进同一条命令。
+
+## 关键压力场景
+
+以下场景必须判定为命中本技能：
+
+- 为抽样验证创建 `mktemp -d`，验证结束后准备移除该目录。
+- 使用 `trap 'rm -rf "$tmpdir"' EXIT` 自动清理临时工作区。
+- 生成最终交付文件后准备清理 Agent 自己生成的中间 `.html`、`.md`、`.txt`、图片或脚本文件。
+- 删除空文件、空目录、缓存目录或“很容易重新生成”的文件。
+- 命令通过管道、`find`、`xargs`、构建工具或同步工具间接让文件系统对象消失。
 
 ## 不适用场景
 
@@ -253,23 +294,37 @@ python scripts/remote-safe-delete.py archive-list \
    git worktree list --porcelain
    git -C <worktree-path> status --short --branch
    ```
-2. 若用户已确认删除，先归档 worktree 目录：
+2. 归档 worktree 前，必须先停止该 worktree 下启动的本地服务器：
+   ```bash
+   for file in \
+     <worktree-path>/.amp-e2e/runtime.json \
+     <worktree-path>/.amp-e2e/state/frontend.json \
+     <worktree-path>/.amp-e2e/state/backend.json \
+     <worktree-path>/.amp-e2e/pids/*; do
+     [ -e "$file" ] && echo "$file"
+   done
+   ```
+   - 优先从 `<worktree-path>/.amp-e2e/runtime.json`、`.amp-e2e/state/*.json`、`.amp-e2e/pids/*` 读取 `frontend_pid`、`backend_pid`、`pid`、端口、URL 和日志路径。
+   - 停止任何 PID 前，必须用 `ps -p <pid> -o pid=,command=` 和 `lsof -a -p <pid> -d cwd -Fn` 或等价方式确认它属于 `<worktree-path>`；不要只凭端口号、进程名、`node`、`python` 或 `uvicorn` 判断。
+   - 对确认属于该 worktree 的 PID，先执行 `kill <pid>`，等待退出，再确认记录中的前端/后端端口不再监听。
+   - 如果运行态登记缺失或 PID 归属无法确认，停止并报告不确定性；不要误杀其他 worktree 的服务器。
+3. 若用户已确认删除，且该 worktree 的本地服务器已停止或确认不存在，再归档 worktree 目录：
    ```bash
    python scripts/agent-safe-delete.py archive <worktree-path> --json
    ```
    已安装技能场景下，将 `scripts/agent-safe-delete.py` 替换为 `<skill-install-dir>/scripts/agent-safe-delete.py`。
-3. 再清理 Git worktree 元数据：
+4. 再清理 Git worktree 元数据：
    ```bash
    git worktree prune --expire now
    ```
-4. 如果 worktree 绑定的是命名分支，归档 worktree 就视为完整清理授权；在确认该分支已合并到当前收尾目标分支后，不再询问用户，直接删除同名本地分支与远端分支：
+5. 如果 worktree 绑定的是命名分支，归档 worktree 就视为完整清理授权；在确认该分支已合并到当前收尾目标分支后，不再询问用户，直接删除同名本地分支与远端分支：
    ```bash
    git merge-base --is-ancestor <feature-branch> HEAD
    git branch -d <feature-branch>
    git push origin --delete <feature-branch>
    ```
    如果远端分支不存在，记录为已不存在即可；如果分支未合并且用户没有明确说“丢弃/废弃”，停止并报告未合并风险。
-5. 验证：
+6. 验证：
    ```bash
    git worktree list --porcelain
    test ! -e <worktree-path>
@@ -280,7 +335,9 @@ python scripts/remote-safe-delete.py archive-list \
 禁止做法：
 
 - 不要把 `git worktree remove <path>` 当作第一步。
+- 不要以为归档或移动 worktree 目录会自动关闭服务器；进程会继续运行，必须先按运行态登记停止。
 - 不要因为 worktree 干净、已合并、可重建，或命令是 Git 官方命令，就跳过归档。
+- 不要凭默认端口、浏览器记忆或进程名误杀服务器；只停止确认属于目标 worktree 的 PID。
 - 不要在归档 worktree 后停在“只清理目录”的半完成状态；同名本地和远端分支也必须按本节规则清理。
 
 分支删除边界：
@@ -288,13 +345,13 @@ python scripts/remote-safe-delete.py archive-list \
 - 删除本地或远端分支不是文件系统删除，不走 `archive`。
 - 单独删除远端分支仍属于版本协作风险操作，应单独说明删除范围并取得确认。
 - 用户要求“归档/删除 worktree”时，已经授权清理该 worktree 绑定的同名本地和远端分支；确认已合并后直接执行，不再二次询问。
-- 顺序固定为：归档 worktree 目录 → `git worktree prune --expire now` → 删除本地分支 → 删除远端分支 → 验证本地/远端分支均不存在。
+- 顺序固定为：停止该 worktree 的本地服务器 → 归档 worktree 目录 → `git worktree prune --expire now` → 删除本地分支 → 删除远端分支 → 验证本地/远端分支均不存在。
 
 ## 快速决策表
 
 | 用户/命令意图 | 正确处理 |
 | --- | --- |
-| `git worktree remove <path>` | 先 `archive <path>`，再 `git worktree prune --expire now`，然后删除已合并的同名本地/远端分支 |
+| `git worktree remove <path>` | 先停止该 worktree 登记的本地服务器，再 `archive <path>`，再 `git worktree prune --expire now`，然后删除已合并的同名本地/远端分支 |
 | `git clean -fd` | 先列出候选对象，再逐项或按明确范围归档 |
 | `rm -rf <path>` / `rmdir <path>` / `unlink <path>` | 改为 `archive <path>` |
 | `rsync --delete` 到远端目录 | 先 dry-run 生成远端将删除清单，再远端归档清单对象，最后才执行同步 |
@@ -305,8 +362,9 @@ python scripts/remote-safe-delete.py archive-list \
 
 ## 压力场景
 
-- 用户说“删除/归档这个旧 worktree”：Agent 应先识别这是目录删除语义，归档 worktree 路径，再清理 Git worktree 元数据；确认绑定分支已合并后，直接删除同名本地和远端分支，不再追问。
-- 用户说“删除 worktree，分支也删掉”：Agent 应把目录删除和分支删除拆开处理，先归档目录并清理 worktree 元数据，再直接删除本地/远端分支并验证为空。
+- 用户说“删除/归档这个旧 worktree”：Agent 应先识别这是目录删除语义，读取该 worktree 的 `.amp-e2e/runtime.json`、`.amp-e2e/state/*.json` 或 `.amp-e2e/pids/*`，停止确认属于该 worktree 的服务器 PID，再归档 worktree 路径；确认绑定分支已合并后，直接删除同名本地和远端分支，不再追问。
+- 用户说“这个 worktree 的页面太丑，直接归档吧”：Agent 不得只归档目录；必须先确认是否有本地前端/后端服务器仍在运行，停止后再归档。
+- 用户说“删除 worktree，分支也删掉”：Agent 应把服务器停止、目录归档和分支删除拆开处理，先停服并归档目录、清理 worktree 元数据，再直接删除本地/远端分支并验证为空。
 - 用户说“用 `rsync --delete` 同步服务器目录”：Agent 应先生成远端将被删除的清单，归档这些远端对象，再执行真正同步；不应把 `--delete` 当作普通同步参数。
 - 用户说“删除服务器上这个临时文件，它不在代码库里”：Agent 应走 `plan-path` + `archive-list --confirm-plan <plan_sha256>`；不应因为本地仓库没有对应文件而跳过安全归档。
 
